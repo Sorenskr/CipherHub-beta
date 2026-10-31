@@ -219,22 +219,23 @@
     var cfg = model.bindConfig || {};
     var hasBound = Boolean(cfg.appsScriptUrl || window.CHStore.parseSheetInput(cfg.sheetUrl).spreadsheetId);
 
+    var bar = $('#syncBar');
     var dot = $('#syncDot');
     var txt = $('#syncText');
     var btnPull = $('#syncPullBtn');
-    if (!dot || !txt) return;
+    if (!bar || !dot || !txt) return;
 
-    dot.className = 'sync-dot';
     if (!hasBound) {
-      txt.innerHTML = '当前未绑定在线表格（展示内置数据） · 可点右侧<b>「绑定在线表格」</b>实时联动';
-      if (btnPull) btnPull.style.display = 'none';
+      bar.style.display = 'none';
       return;
     }
 
+    bar.style.display = '';
+    dot.className = 'sync-dot';
     if (btnPull) btnPull.style.display = '';
     if (meta.status === 'syncing') {
       dot.classList.add('syncing');
-      txt.textContent = '正在从在线表格实时同步 A1姓名 / B1关键词 / C1模板…';
+      txt.textContent = '正在实时同步最新数据…';
     } else if (meta.status === 'ok') {
       dot.classList.add('ok');
       txt.innerHTML = '已实时同步在线表格' +
@@ -243,10 +244,10 @@
         (meta.lastSyncAt ? ' · 同步于 ' + esc(meta.lastSyncAt) : '');
     } else if (meta.status === 'err') {
       dot.classList.add('err');
-      txt.innerHTML = '在线表格同步失败：' + esc(meta.error || '请检查链接或权限') + '（当前展示上次缓存）';
+      txt.innerHTML = '同步提示：' + esc(meta.error || '请检查网络连接') + '（当前展示本地缓存）';
     } else {
       dot.classList.add('ok');
-      txt.innerHTML = '已配置在线表格 · 共 <b>' + model.rows.length + '</b> 行';
+      txt.innerHTML = '已连接在线数据 · 共 <b>' + model.rows.length + '</b> 行';
     }
   }
 
@@ -255,13 +256,13 @@
     var out = [];
     var sampleRows = shuffle(model.rows).slice(0, 6);
     sampleRows.forEach(function (r) {
-      out.push('试着输入关键词「' + r.keyword + '」(' + r.template + ')');
+      out.push('试着输入「' + r.keyword + '」查归属人');
     });
     var samplePeople = shuffle(model.people).slice(0, 3);
     samplePeople.forEach(function (p) {
-      out.push('搜姓名「' + p.name + '」查看全部模板关键词');
+      out.push('输入姓名「' + p.name + '」查看名下全部暗号');
     });
-    out.push('输入 A列姓名 / B列关键词 / C列模板 秒查对应记录');
+    out.push('输入姓名或关键词，秒查专属归属人');
     return shuffle(out);
   }
 
@@ -296,9 +297,9 @@
     clearInterval(state.phType);
   }
 
-  /* ---------- 模板筛选按钮行（严格按 7 大模板顺序） ---------- */
+  /* ---------- 分类筛选按钮行 ---------- */
   function renderFilters(model) {
-    var html = '<button class="chip' + (state.template ? '' : ' on') + '" data-tpl="">全部模板 <span class="cnt">' + model.rows.length + '</span></button>';
+    var html = '<button class="chip' + (state.template ? '' : ' on') + '" data-tpl="">全部分类 <span class="cnt">' + model.rows.length + '</span></button>';
     model.templates.forEach(function (t) {
       html += '<button class="chip' + (state.template === t.name ? ' on' : '') + '" data-tpl="' + esc(t.name) + '">' +
         '<span class="pico" style="background:' + esc(t.color) + '">' + esc(pico(t.name)) + '</span>' +
@@ -321,10 +322,10 @@
   /* ---------- 统计条 ---------- */
   function renderStats(model) {
     var cards = [
-      { n: model.stats.people,    t: 'A1 姓名（成员数）' },
-      { n: model.stats.entries,   t: 'B1 关键词（总行数）' },
-      { n: model.stats.templates, t: 'C1 模板分类（固定顺序）' },
-      { n: model.source.indexOf('cloud') === 0 ? '实时在线' : '本地就绪', t: '表格同步状态', isText: true }
+      { n: model.stats.people,    t: '归属成员' },
+      { n: model.stats.entries,   t: '暗号 / 关键词' },
+      { n: model.stats.templates, t: '所属分类' },
+      { n: model.source.indexOf('cloud') === 0 ? '实时在线' : '本地就绪', t: '数据状态', isText: true }
     ];
     var box = $('#stats');
     if (box) {
@@ -338,7 +339,7 @@
     }
   }
 
-  /* ---------- 速览：7 大模板矩阵（番号 → 聊天 → 对比 → 任务 → 新模版 → 备用 → 备用 2） ---------- */
+  /* ---------- 速览：分类矩阵 ---------- */
   function renderMatrix(model) {
     var tpls = model.templates;
     var max = 1;
@@ -346,16 +347,15 @@
 
     var box = $('#matrix');
     if (!box) return;
-    box.innerHTML = tpls.map(function (t, i) {
+    box.innerHTML = tpls.map(function (t) {
       var n = t.count || 0;
       var rel = max ? Math.max((n / max * 100), n > 0 ? 6 : 0) : 0;
       return '<div class="mx' + (state.template === t.name ? ' on' : '') + '" data-tpl="' + esc(t.name) + '" style="--pc:' + esc(t.color) + '">' +
         '<div class="top">' +
           '<span class="ico" style="background:' + esc(t.color) + '">' + esc(pico(t.name)) + '</span>' +
           '<span class="nm">' + esc(t.name) + '</span>' +
-          '<span class="ord">#' + (i + 1) + '</span>' +
         '</div>' +
-        '<div class="nums"><b>' + n + '</b><small>行</small></div>' +
+        '<div class="nums"><b>' + n + '</b><small>条</small></div>' +
         '<div class="bar"><i style="width:' + rel.toFixed(1) + '%"></i></div>' +
       '</div>';
     }).join('');
@@ -371,8 +371,8 @@
     var note = $('#discoverNote');
     if (note) {
       note.textContent = state.template
-        ? '已筛选模板「' + state.template + '」'
-        : '排列顺序：先放完「番号」，再放「聊天」，接着是对比、任务、新模版、备用、备用 2';
+        ? '已聚焦「' + state.template + '」'
+        : '点击任意分类查看随机样本';
     }
   }
 
@@ -401,7 +401,7 @@
         var one = picked.map(function (it) {
           return '<span class="mq-item" style="--pc:' + esc(it.color) + '">' +
             '<span class="d"></span><span class="v">' + esc(it.maskedValue) + '</span>' +
-            '<span class="p">' + esc(it.template) + ' · ' + esc(it.maskedName) + '</span></span>';
+            '<span class="p">' + esc(it.template) + ' · 归属 ' + esc(it.maskedName) + '</span></span>';
         }).join('');
         mq.innerHTML = one + one;
       }
@@ -417,12 +417,12 @@
       pvBox.style.display = show ? '' : 'none';
       if (show) {
         $('#pvTitle').textContent = state.template + ' · 随机样本';
-        $('#pvNote').textContent = '该模板共 ' + pool.length + ' 行，以下为随机抽取的脱敏样本';
+        $('#pvNote').textContent = '共 ' + pool.length + ' 条，以下为随机抽取的脱敏样本';
         $('#pvGrid').innerHTML = picked.slice(0, 12).map(function (it, idx) {
           return '<div class="pv" style="--pc:' + esc(it.color) + ';animation-delay:' + (idx * 40) + 'ms">' +
-            '<div class="t"><span class="d"></span>' + esc(it.template) + ' · 第 ' + it.rowNumber + ' 行</div>' +
+            '<div class="t"><span class="d"></span>' + esc(it.template) + '</div>' +
             '<div class="v">' + esc(it.maskedValue) + '</div>' +
-            '<div class="w">A列姓名：' + esc(it.maskedName) + '</div>' +
+            '<div class="w">归属人：' + esc(it.maskedName) + '</div>' +
           '</div>';
         }).join('');
       }
@@ -434,7 +434,7 @@
     var body = $('#spotBody'), dots = $('#spotDots');
     if (!body || !dots) return;
     if (!items || !items.length) {
-      body.innerHTML = '<div class="muted tiny">当前模板暂无记录</div>';
+      body.innerHTML = '<div class="muted tiny">当前分类暂无记录</div>';
       dots.innerHTML = '';
       return;
     }
@@ -462,10 +462,10 @@
       body.innerHTML =
         '<div class="spot-item" style="--pc:' + esc(it.color) + '">' +
           '<div class="spot-plat"><span class="ico">' + esc(pico(it.template)) + '</span>' +
-            '<b>C1 模板：' + esc(it.template) + '</b>' +
-            '<span class="tag">表格第 ' + it.rowNumber + ' 行</span></div>' +
+            '<b>' + esc(it.template) + '</b>' +
+            '<span class="tag">暗号</span></div>' +
           '<div class="spot-code">' + esc(it.maskedValue) + '</div>' +
-          '<div class="spot-who">A1 姓名：' + esc(it.maskedName) + '</div>' +
+          '<div class="spot-who">归属人：' + esc(it.maskedName) + '</div>' +
         '</div>';
     }
     var dots = $('#spotDots');
@@ -476,7 +476,7 @@
     }
   }
 
-  /* ---------- 在线表格 1:1 视图（A1姓名 | B1关键词 | C1模板） ---------- */
+  /* ---------- 归属人全量明细视图 ---------- */
   function renderSheetOneToOneView(model) {
     var sec = $('#sheetViewSec');
     if (!sec) return;
@@ -497,24 +497,23 @@
     var colorMap = {};
     model.templates.forEach(function (t) { colorMap[t.name] = t.color; });
 
-    $('#sheetViewCount').textContent = '当前显示 ' + filtered.length + ' 行 / 总表共 ' + model.rows.length + ' 行（A1姓名 · B1关键词 · C1模板 一一对应）';
+    $('#sheetViewCount').textContent = '共 ' + filtered.length + ' 条记录';
 
     var tbody = $('#sheetViewBody');
     if (!filtered.length) {
-      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:36px;color:var(--text-mute)">没有匹配的表格行</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;padding:36px;color:var(--text-mute)">没有找到匹配的记录</td></tr>';
       return;
     }
 
-    tbody.innerHTML = filtered.slice(0, state.entryLimit).map(function (r) {
+    tbody.innerHTML = filtered.slice(0, state.entryLimit).map(function (r, idx) {
       var c = colorMap[r.template] || '#7c5cff';
       return '<tr>' +
-        '<td class="mono muted" style="width:76px">A' + r.rowNumber + ':C' + r.rowNumber + '</td>' +
-        '<td><b style="cursor:pointer" data-goto="' + esc(r.name) + '" title="点击筛选该姓名">' + highlight(r.name, state.q) + '</b></td>' +
+        '<td class="mono muted" style="width:76px">#' + (idx + 1) + '</td>' +
+        '<td><b style="cursor:pointer" data-goto="' + esc(r.name) + '" title="点击查看该归属人全部暗号">' + highlight(r.name, state.q) + '</b></td>' +
         '<td class="mono"><span class="code" data-copy="' + esc(r.keyword) + '" title="点击复制关键词">' + highlight(r.keyword, state.q) + '</span></td>' +
         '<td><span class="tag"><span style="width:8px;height:8px;border-radius:50%;background:' + esc(c) + ';display:inline-block"></span>' + highlight(r.template, state.q) + '</span></td>' +
         '<td style="width:130px"><div class="ops">' +
-          '<button class="btn sm ghost" data-copy="' + esc(r.keyword) + '">复制关键词</button>' +
-          '<button class="btn sm ghost" data-copy="' + esc(r.name + '\t' + r.keyword + '\t' + r.template) + '" title="复制整行">整行</button>' +
+          '<button class="btn sm ghost" data-copy="' + esc(r.keyword) + '">复制</button>' +
         '</div></td>' +
       '</tr>';
     }).join('');
@@ -522,7 +521,7 @@
     bindResultEvents(sec);
   }
 
-  /* ---------- 搜索结果（成员卡片 + 匹配行明细） ---------- */
+  /* ---------- 搜索结果（归属人卡片 + 匹配明细） ---------- */
   function personCard(p, q, tplFilter, colorMap) {
     var groups = {};
     var entries = p.entries.filter(function (e) {
@@ -553,7 +552,7 @@
         esc(g.name) + '<span class="cnt">· ' + g.list.length + '</span></div>' +
         '<div class="chips">' + g.list.map(function (e) {
           var hit = q && e.keyword.toLowerCase().indexOf(q.toLowerCase()) >= 0;
-          return '<span class="code' + (hit ? ' hit' : '') + '" data-copy="' + esc(e.keyword) + '" title="表格第 ' + e.rowNumber + ' 行 · 点击复制">' +
+          return '<span class="code' + (hit ? ' hit' : '') + '" data-copy="' + esc(e.keyword) + '" title="点击复制">' +
             highlight(e.keyword, q) + '</span>';
         }).join('') + '</div>' +
       '</div>';
@@ -563,7 +562,7 @@
       '<div class="head">' +
         '<div class="avatar" style="background:' + avatarColor(p.name) + '">' + esc(p.name.slice(0, 1)) + '</div>' +
         '<div><div class="name">' + highlight(p.name, q) + '</div>' +
-          '<div class="sub"><span class="tag">共 ' + entries.length + ' 条关键词</span></div></div>' +
+          '<div class="sub"><span class="tag">归属人</span><span class="tag">共 ' + entries.length + ' 条</span></div></div>' +
         '<button class="btn sm ghost copy-all" data-copyall="' + esc(p.name) + '">复制全部</button>' +
       '</div>' +
       (body || '<div class="tiny muted">暂无记录</div>') +
@@ -572,11 +571,10 @@
 
   function entryRow(e, q) {
     return '<div class="entry">' +
-      '<span class="row-idx" title="对应在线表格行号">#' + e.rowNumber + '</span>' +
       '<span class="val">' + highlight(e.keyword, q) + '</span>' +
-      '<span class="who">A1 姓名：<b data-goto="' + esc(e.name) + '">' + highlight(e.name, q) + '</b></span>' +
+      '<span class="who">归属人：<b data-goto="' + esc(e.name) + '">' + highlight(e.name, q) + '</b></span>' +
       '<span class="right">' +
-        '<span class="tag"><span class="pico" style="background:' + esc(e.color || '#7c5cff') + ';width:15px;height:15px;border-radius:4px;display:inline-grid;place-items:center;font-size:9px;color:#fff">' + esc(pico(e.template)) + '</span>C1 模板：' + highlight(e.template, q) + '</span>' +
+        '<span class="tag"><span class="pico" style="background:' + esc(e.color || '#7c5cff') + ';width:15px;height:15px;border-radius:4px;display:inline-grid;place-items:center;font-size:9px;color:#fff">' + esc(pico(e.template)) + '</span>' + highlight(e.template, q) + '</span>' +
         '<button class="btn sm ghost" data-copy="' + esc(e.keyword) + '">复制</button>' +
       '</span>' +
     '</div>';
@@ -607,21 +605,21 @@
     });
 
     if (!matchedPeople.length && !matchedEntries.length) {
-      box.innerHTML = '<div class="empty"><div class="big">🔍</div>没有找到与「' + esc(q) + '」相关的记录<br>' +
-        '<span class="tiny">可切换模板筛选，或在在线表格中添加后再点「立即同步」</span></div>';
+      box.innerHTML = '<div class="empty"><div class="big">🔍</div>没有找到与「' + esc(q) + '」相关的归属人或关键词<br>' +
+        '<span class="tiny">换个关键词试试，或联系管理员添加</span></div>';
       return;
     }
 
     var html = '';
     if (matchedPeople.length) {
-      html += '<div class="section-head"><h2>匹配成员（按 A1 姓名聚合）</h2><span class="n">共 ' + matchedPeople.length + ' 人</span></div>';
+      html += '<div class="section-head"><h2>匹配归属人</h2><span class="n">共 ' + matchedPeople.length + ' 人</span></div>';
       html += '<div class="people-grid">' + matchedPeople.slice(0, state.limit).map(function (p) {
         return personCard(p, q, tplFilter, colorMap);
       }).join('') + '</div>';
     }
 
     if (matchedEntries.length) {
-      html += '<div class="section-head"><h2>匹配表格行（A1 姓名 · B1 关键词 · C1 模板）</h2><span class="n">共 ' + matchedEntries.length + ' 行（按番号→聊天→对比→任务→新模版→备用→备用 2 排列）</span></div>';
+      html += '<div class="section-head"><h2>匹配暗号 / 关键词</h2><span class="n">共 ' + matchedEntries.length + ' 条</span></div>';
       html += '<div class="entry-list">' + matchedEntries.slice(0, state.entryLimit).map(function (e) {
         return entryRow(e, q);
       }).join('') + '</div>';
@@ -691,7 +689,7 @@
     var html = '';
     state.sugItems = [];
     if (peopleHits.length) {
-      html += '<div class="grp">A1 姓名</div>';
+      html += '<div class="grp">归属人</div>';
       peopleHits.forEach(function (p) {
         state.sugItems.push(p.name);
         html += '<div class="item" data-v="' + esc(p.name) + '"><span>👤</span><span>' + highlight(p.name, state.q) + '</span>' +
@@ -699,11 +697,11 @@
       });
     }
     if (kwHits.length) {
-      html += '<div class="grp">B1 关键词</div>';
+      html += '<div class="grp">暗号 / 关键词</div>';
       kwHits.forEach(function (e) {
         state.sugItems.push(e.keyword);
         html += '<div class="item" data-v="' + esc(e.keyword) + '"><span>#</span><span class="val">' + highlight(e.keyword, state.q) + '</span>' +
-          '<span class="meta">' + esc(e.name) + ' · ' + esc(e.template) + '</span></div>';
+          '<span class="meta">归属：' + esc(e.name) + ' · ' + esc(e.template) + '</span></div>';
       });
     }
     if (!html) html = '<div class="empty">无匹配建议</div>';
@@ -825,7 +823,11 @@
     document.title = (model.settings && model.settings.siteName) || '暗号查询中心 Beta';
     $('#siteName').textContent = (model.settings && model.settings.siteName) || '暗号查询中心 Beta';
     if (model.settings && model.settings.subtitle) {
-      $('#subtitle').textContent = model.settings.subtitle;
+      var subText = model.settings.subtitle;
+      if (subText.indexOf('对应模板') >= 0 || subText.indexOf('在线表格实时联动') >= 0) {
+        subText = '支持按姓名正查名下全部关键词，或输入暗号关键词反查归属人';
+      }
+      $('#subtitle').textContent = subText;
     }
 
     renderSyncBar(model);

@@ -23,7 +23,7 @@
 
 <header class="topbar">
   <div class="wrap">
-    <a class="brand" href="#" title="连点 Logo 5 次可进入后台">
+    <a class="brand" href="#">
       <span class="logo" id="logoBox"><img id="brandLogo" src="" alt="logo"></span>
       <span id="siteName">暗号查询中心 Beta</span>
       <span class="beta-badge">BETA</span>
@@ -35,9 +35,8 @@
     </button>
     <nav>
       <a href="#discover" id="navDiscover">速览</a>
-      <a href="#sheetViewSec" id="navSheetView">1:1 表格</a>
+      <a href="#sheetViewSec" id="navSheetView">全量明细</a>
       <a href="#feedback">反馈</a>
-      <button type="button" class="nav-btn" id="topAdminBtn" title="进入后台绑定在线表格">⚙️ 后台 / 绑定表格</button>
       <button class="icon-btn" id="themeBtn" title="切换明暗主题" aria-label="切换主题">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
           <path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/>
@@ -52,20 +51,19 @@
     <!-- 在线表格实时联动状态条 -->
     <div class="sync-bar" id="syncBar">
       <span class="sync-dot" id="syncDot"></span>
-      <span id="syncText">正在检查在线表格绑定状态…</span>
-      <button type="button" class="btn sm ghost" id="syncPullBtn" style="padding:3px 10px;font-size:12px">🔄 立即同步</button>
-      <button type="button" class="btn sm primary" id="openBindBtn" style="padding:3px 10px;font-size:12px">🔗 绑定在线表格</button>
+      <span id="syncText">正在同步最新数据…</span>
+      <button type="button" class="btn sm ghost" id="syncPullBtn" style="padding:3px 10px;font-size:12px">🔄 立即刷新</button>
     </div>
 
-    <h1>输入 <em>姓名</em> 或 <em>关键词</em>，秒查 1:1 对应模板</h1>
-    <p id="subtitle">A1 姓名 · B1 关键词 · C1 模板 —— 按「番号 → 聊天 → 对比 → 任务 → 新模版 → 备用 → 备用 2」固定顺序实时联动</p>
+    <h1>输入 <em>姓名</em> 或 <em>关键词</em>，秒查专属归属人</h1>
+    <p id="subtitle">支持按姓名正查名下全部关键词，或输入暗号关键词反查归属人</p>
 
     <div class="searchbox" id="searchbox">
       <div class="field">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
           <circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>
         </svg>
-        <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="输入姓名、关键词或模板名称…">
+        <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="输入姓名或关键词查询归属人…">
         <button class="clear" id="clearBtn" title="清空" aria-label="清空">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
         </button>
@@ -78,7 +76,7 @@
       <div style="margin-top:4px">
         <div class="view-switch" id="viewSwitch" role="tablist" aria-label="展示模式切换">
           <button type="button" class="on" data-view="discover">✨ 速览与卡片模式</button>
-          <button type="button" data-view="sheet">📋 在线表格 1:1 视图（A1姓名 / B1关键词 / C1模板）</button>
+          <button type="button" data-view="sheet">📋 归属人全量明细</button>
         </div>
       </div>
     </div>
@@ -86,11 +84,11 @@
 
   <section class="stats" id="stats"></section>
 
-  <!-- 模式一：7 大模板速览（番号 → 聊天 → 对比 → 任务 → 新模版 → 备用 → 备用 2） -->
+  <!-- 模式一：分类速览 -->
   <section id="discover" class="discover">
     <div class="sec-head">
-      <h2>模板矩阵速览</h2>
-      <span class="n" id="discoverNote">排列顺序：先放完「番号」表所有人，再放「聊天」表的，接着是对比、任务、新模版、备用、备用 2</span>
+      <h2>分类速览</h2>
+      <span class="n" id="discoverNote">点击任意分类查看随机样本</span>
       <span class="spacer"></span>
       <button class="btn sm ghost" id="shuffleAll">换一批样本</button>
     </div>
@@ -101,7 +99,7 @@
 
     <div class="spot">
       <div class="spot-in">
-        <div class="spot-label">随机聚焦 · 对应在线表格 A/B/C 列（已脱敏）</div>
+        <div class="spot-label">随机聚焦 · 内容已脱敏</div>
         <div class="spot-body" id="spotBody"></div>
         <div class="spot-foot">
           <span class="spot-dots" id="spotDots"></span>
@@ -120,26 +118,18 @@
     </div>
 
     <div class="tip-bar">
-      <b>💡 在线表格 1:1 实时对应说明：</b><br>
-      在线表格第一行表头固定为 <code>A1 姓名</code>、<code>B1 关键词</code>、<code>C1 模板</code>；从第 2 行起由上往下严格按 <b>番号 → 聊天 → 对比 → 任务 → 新模版 → 备用 → 备用 2</b> 顺序拼接，在在线表格实时修改后前台自动同步统一。
+      以上均为<b>随机抽样并脱敏</b>的展示，不是完整名单。<br>
+      想知道某条关键词属于哪位归属人、或某个人有哪些关键词 —— 在上方输入<b>姓名 / 关键词</b>即可秒查。
     </div>
   </section>
 
-  <!-- 模式二：与在线表格完全一一对应的三列视图 (A1 姓名 | B1 关键词 | C1 模板) -->
+  <!-- 模式二：归属人全量明细视图 -->
   <section id="sheetViewSec" class="sheet-view-sec" style="display:none">
-    <div class="order-rule-banner">
-      <span>📌 <b>固定拼接顺序：</b></span>
-      <div class="order-flow">
-        <span class="order-step">1. 番号</span><span class="order-arrow">→</span>
-        <span class="order-step">2. 聊天</span><span class="order-arrow">→</span>
-        <span class="order-step">3. 对比</span><span class="order-arrow">→</span>
-        <span class="order-step">4. 任务</span><span class="order-arrow">→</span>
-        <span class="order-step">5. 新模版</span><span class="order-arrow">→</span>
-        <span class="order-step">6. 备用</span><span class="order-arrow">→</span>
-        <span class="order-step">7. 备用 2</span>
-      </div>
+    <div class="sec-head" style="margin-top:8px">
+      <h2>归属人全量明细</h2>
+      <span class="n" id="sheetViewCount"></span>
       <span class="spacer"></span>
-      <button type="button" class="btn sm primary" id="copySheetAllBtn">📋 一键复制当前表（可直贴 Excel / 在线表格）</button>
+      <button type="button" class="btn sm primary" id="copySheetAllBtn">📋 一键复制当前明细</button>
     </div>
 
     <div class="table-card">
@@ -147,18 +137,15 @@
         <table class="tbl">
           <thead>
             <tr>
-              <th style="width:95px">单元格行</th>
-              <th><span class="col-head-pill">A1</span>姓名</th>
-              <th><span class="col-head-pill">B1</span>关键词</th>
-              <th><span class="col-head-pill">C1</span>模板</th>
+              <th style="width:80px">序号</th>
+              <th>归属人</th>
+              <th>关键词 / 暗号</th>
+              <th>所属分类</th>
               <th style="width:140px">快捷操作</th>
             </tr>
           </thead>
           <tbody id="sheetViewBody"></tbody>
         </table>
-      </div>
-      <div class="table-foot">
-        <span id="sheetViewCount"></span>
       </div>
     </div>
   </section>
@@ -195,7 +182,7 @@
 </main>
 
 <footer class="foot">
-  <div><b>CipherHub Beta</b> · 在线表格实时联动版（A1 姓名 · B1 关键词 · C1 模板）</div>
+  <div><b>CipherHub Beta</b> · 暗号与归属人快速查询中心</div>
   <div class="tiny" style="margin-top:6px" id="updatedAt"></div>
 </footer>
 

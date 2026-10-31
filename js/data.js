@@ -84,7 +84,7 @@
     updatedAt: '2026-10-31T19:00:00.000Z',
     settings: {
       siteName: '暗号查询中心 Beta',
-      subtitle: 'A1 姓名 · B1 关键词 · C1 模板 —— 在线表格 1:1 实时同步查询',
+      subtitle: '支持按姓名正查名下全部关键词，或输入暗号关键词反查归属人',
       logos: [SVG_LOGO_1, SVG_LOGO_2],
       groups: ['Laya'],
       feedback: {

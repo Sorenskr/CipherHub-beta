@@ -282,7 +282,7 @@ function getSiteSettings_() {
   var raw = PropertiesService.getScriptProperties().getProperty('CH_BETA_SETTINGS');
   var def = {
     siteName: '暗号查询中心 Beta',
-    subtitle: '在线表格实时联动 · 输入姓名或关键词秒查对应模板',
+    subtitle: '支持按姓名正查名下全部关键词，或输入暗号关键词反查归属人',
     groups: ['Laya'],
     logos: ['assets/Laya.png', 'assets/Laya2.png'],
     feedback: {
