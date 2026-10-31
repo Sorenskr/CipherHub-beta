@@ -8,9 +8,12 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="format-detection" content="telephone=no">
-<meta name="description" content="CipherHub Beta · 在线表格 1:1 实时同步查询中心（A1 姓名 · B1 关键词 · C1 模板：番号 / 聊天 / 对比 / 任务 / 新模版 / 备用 / 备用 2）">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<meta name="description" content="CipherHub Beta · 暗号与归属人快速查询中心">
 <title>暗号查询中心 Beta</title>
-<link rel="stylesheet" href="css/style.css">
+<link rel="stylesheet" href="css/style.css?v=20261101b">
 </head>
 <body>
 
@@ -48,8 +51,8 @@
 
 <main class="wrap">
   <section class="hero">
-    <!-- 在线表格实时联动状态条 -->
-    <div class="sync-bar" id="syncBar">
+    <!-- 在线表格实时联动状态条（前台隐藏） -->
+    <div class="sync-bar" id="syncBar" style="display:none">
       <span class="sync-dot" id="syncDot"></span>
       <span id="syncText">正在同步最新数据…</span>
       <button type="button" class="btn sm ghost" id="syncPullBtn" style="padding:3px 10px;font-size:12px">🔄 立即刷新</button>
@@ -453,10 +456,10 @@
 <div id="admToast"></div>
 
 <!-- 纯静态无构建脚本，按序加载，直接用 Live Server 即可打开 -->
-<script src="js/data.js"></script>
-<script src="js/sheet-sync.js"></script>
-<script src="js/app.js"></script>
-<script src="js/admin.js"></script>
+<script src="js/data.js?v=20261101b"></script>
+<script src="js/sheet-sync.js?v=20261101b"></script>
+<script src="js/app.js?v=20261101b"></script>
+<script src="js/admin.js?v=20261101b"></script>
 </body>
 </html>
 

@@ -213,42 +213,10 @@
     }
   }
 
-  /* ---------- 在线表格同步状态条 ---------- */
-  function renderSyncBar(model) {
-    var meta = model.syncMeta || {};
-    var cfg = model.bindConfig || {};
-    var hasBound = Boolean(cfg.appsScriptUrl || window.CHStore.parseSheetInput(cfg.sheetUrl).spreadsheetId);
-
+  /* ---------- 在线表格同步状态条（前台静默同步，不向访客暴露表格状态栏） ---------- */
+  function renderSyncBar() {
     var bar = $('#syncBar');
-    var dot = $('#syncDot');
-    var txt = $('#syncText');
-    var btnPull = $('#syncPullBtn');
-    if (!bar || !dot || !txt) return;
-
-    if (!hasBound) {
-      bar.style.display = 'none';
-      return;
-    }
-
-    bar.style.display = '';
-    dot.className = 'sync-dot';
-    if (btnPull) btnPull.style.display = '';
-    if (meta.status === 'syncing') {
-      dot.classList.add('syncing');
-      txt.textContent = '正在实时同步最新数据…';
-    } else if (meta.status === 'ok') {
-      dot.classList.add('ok');
-      txt.innerHTML = '已实时同步在线表格' +
-        (meta.sheetTitle ? '（<b>' + esc(meta.sheetTitle) + '</b>）' : '') +
-        ' · 共 <b>' + model.rows.length + '</b> 行' +
-        (meta.lastSyncAt ? ' · 同步于 ' + esc(meta.lastSyncAt) : '');
-    } else if (meta.status === 'err') {
-      dot.classList.add('err');
-      txt.innerHTML = '同步提示：' + esc(meta.error || '请检查网络连接') + '（当前展示本地缓存）';
-    } else {
-      dot.classList.add('ok');
-      txt.innerHTML = '已连接在线数据 · 共 <b>' + model.rows.length + '</b> 行';
-    }
+    if (bar) bar.style.display = 'none';
   }
 
   /* ---------- 搜索框占位轮播 ---------- */
