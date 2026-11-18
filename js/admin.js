@@ -2,10 +2,10 @@
  * CipherHub Beta · 内置后台管理逻辑 (admin.js)
  *
  * 核心能力：
- *   1. 在线表格绑定（支持 Google Apps Script Web App 双向读写 + Google Sheets 链接直连实时拉取）
- *   2. 一一对应总表管理（A1 姓名 | B1 关键词 | C1 模板），严格保持：
- *      【先放完「番号」表所有人，再放「聊天」表的，接着是对比、任务、新模版、备用、备用 2，不会乱】
- *   3. 成员聚合视图、Excel/表格直接复制粘贴批量导入、CSV/JSON 导出与站点设置
+ *   1. 在线表格绑定与「按团队一键清理云端总表与短链」
+ *   2. 总表暗号管理（A1姓名 | B1关键词 | C1平台/模板）
+ *   3. 短链管理（A1姓名 | B1短链 | C1地址）
+ *   4. 团队与成员汇总、批量粘贴导入、CSV / data.js 导出与站点设置
  */
 (function () {
   'use strict';
@@ -39,7 +39,7 @@
       el.style.transition = 'opacity .25s';
       el.style.opacity = '0';
       setTimeout(function () { el.remove(); }, 260);
-    }, 2200);
+    }, 2400);
   }
 
   function getPass() {
@@ -118,7 +118,7 @@
 
   /* ---------------- 渲染各面板 ---------------- */
   function fillTemplateSelects(model) {
-    var opts = '<option value="">全部模板（按固定顺序）</option>' +
+    var opts = '<option value="">全部分类（按固定顺序）</option>' +
       model.templates.map(function (t) {
         return '<option value="' + esc(t.name) + '">' + esc(t.name) + ' (' + (t.count || 0) + ')</option>';
       }).join('');
@@ -144,6 +144,7 @@
     fillTemplateSelects(model);
     renderBindOverview(model);
     renderRowsTable(model);
+    renderLinksTable(model);
     renderPeopleTable(model);
   }
 
@@ -153,7 +154,7 @@
     $('#admCfgSheetUrl').value = cfg.sheetUrl || '';
     $('#admCfgSheetName').value = cfg.sheetName || '';
     $('#admCfgToken').value = cfg.adminToken || 'admin123';
-    $('#admCfgInterval').value = String(cfg.autoSyncSec !== undefined ? cfg.autoSyncSec : 30);
+    $('#admCfgInterval').value = String(cfg.autoSyncSec !== undefined ? cfg.autoSyncSec : 25);
     $('#admCfgAutoPush').checked = cfg.autoPushOnEdit !== false;
   }
 
@@ -181,7 +182,7 @@
     } else if (hasSheet) {
       statusHtml = '<span class="tag" style="border-color:rgba(62,166,255,.5);color:var(--brand-2)">🔵 已绑定 Google 表格直连读取</span>';
     } else {
-      statusHtml = '<span class="tag">⚪ 未绑定在线表格（当前使用本地数据）</span>';
+      statusHtml = '<span class="tag">⚪ 未绑定在线表格（当前使用本地快照）</span>';
     }
     if (meta.lastSyncAt) {
       statusHtml += ' <span class="tiny muted">最近同步：' + esc(meta.lastSyncAt) + '</span>';
@@ -192,10 +193,10 @@
     $('#admBindStatusBox').innerHTML = statusHtml;
 
     var cards = [
-      { n: model.rows.length,      t: '总行数 (A2:C' + (model.rows.length + 1) + ')' },
-      { n: model.people.length,    t: 'A1 姓名 (去重人数)' },
-      { n: model.templates.length, t: 'C1 模板数 (固定顺序)' },
-      { n: hasGas ? '双向读写' : (hasSheet ? '实时只读' : '本地模式'), t: '当前连接模式' }
+      { n: model.people.length,                t: '团队在册成员（' + (model.teams ? model.teams.length : 0) + ' 组）' },
+      { n: model.rows.length,                  t: '总表暗号行数' },
+      { n: (model.shortLinks || []).length,    t: '短链表条数' },
+      { n: hasGas ? '双向读写' : (hasSheet ? '实时只读' : '本地快照'), t: '当前连接模式' }
     ];
     $('#admDashStats').innerHTML = cards.map(function (c) {
       return '<div class="box"><b>' + esc(c.n) + '</b><span>' + esc(c.t) + '</span></div>';
@@ -214,7 +215,7 @@
     }).join('');
   }
 
-  /* ---------------- 一一对应总表（A1 姓名 | B1 关键词 | C1 模板） ---------------- */
+  /* ---------------- 总表暗号（A1 姓名 | B1 关键词 | C1 平台/模板） ---------------- */
   function renderRowsTable(model) {
     var q = ($('#admRQ').value || '').trim().toLowerCase();
     var tpl = $('#admRTpl').value || '';
@@ -226,13 +227,14 @@
       if (tpl && r.template !== tpl) return false;
       if (q) {
         return r.name.toLowerCase().indexOf(q) >= 0 ||
+               (r.group || '').toLowerCase().indexOf(q) >= 0 ||
                r.keyword.toLowerCase().indexOf(q) >= 0 ||
                r.template.toLowerCase().indexOf(q) >= 0;
       }
       return true;
     });
 
-    $('#admRCount').textContent = '当前筛选 ' + list.length + ' 行 / 总计 ' + model.rows.length + ' 行（严格按：番号 → 聊天 → 对比 → 任务 → 新模版 → 备用 → 备用 2 排列）';
+    $('#admRCount').textContent = '当前筛选 ' + list.length + ' 行 / 总计 ' + model.rows.length + ' 行';
 
     $('#admRBody').innerHTML = list.slice(0, 600).map(function (r) {
       var c = colorMap[r.template] || '#7c5cff';
@@ -240,6 +242,7 @@
       return '<tr>' +
         '<td class="mono muted">第 ' + r.rowNumber + ' 行</td>' +
         '<td><b>' + esc(r.name) + '</b></td>' +
+        '<td>' + (r.group ? '<span class="tag">' + esc(r.group) + '</span>' : '<span class="muted tiny">—</span>') + '</td>' +
         '<td class="mono">' + esc(r.keyword) + '</td>' +
         '<td><span class="tag"><span style="width:8px;height:8px;border-radius:50%;background:' + esc(c) + ';display:inline-block"></span>' + esc(r.template) + '</span></td>' +
         '<td><div class="ops">' +
@@ -247,7 +250,7 @@
           '<button class="btn sm danger" data-rdel="' + rowIdx + '">删除</button>' +
         '</div></td>' +
       '</tr>';
-    }).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--text-mute);padding:28px">暂无记录</td></tr>';
+    }).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--text-mute);padding:28px">暂无记录</td></tr>';
 
     $$('#admRBody [data-redit]').forEach(function (b) {
       b.onclick = function () { openRowModal(Number(b.dataset.redit)); };
@@ -266,18 +269,18 @@
       return '<option value="' + esc(t.name) + '"' + (cur.template === t.name ? ' selected' : '') + '>' + esc(t.name) + '</option>';
     }).join('');
 
-    openModal(isEdit ? ('编辑表格第 ' + cur.rowNumber + ' 行') : '新增表格行（自动归入对应模板顺序）',
-      '<div class="form-row"><label>A1 姓名 *</label><input class="input" id="admFName" value="' + esc(cur.name) + '" placeholder="输入成员姓名"></div>' +
+    openModal(isEdit ? ('编辑总表第 ' + cur.rowNumber + ' 行') : '新增暗号行',
+      '<div class="form-row"><label>A1 姓名 *（须在「团队」表中在册）</label><input class="input" id="admFName" value="' + esc(cur.name) + '" placeholder="输入成员姓名"></div>' +
       '<div class="form-row"><label>B1 关键词 *</label><input class="input" id="admFKeyword" value="' + esc(cur.keyword) + '" placeholder="输入对应的关键词 / 暗号"></div>' +
-      '<div class="form-row"><label>C1 模板 *</label><select class="select" id="admFTpl">' + tplOptions + '</select></div>' +
-      '<div class="tiny muted">保存后将自动按「番号 → 聊天 → 对比 → 任务 → 新模版 → 备用 → 备用 2」固定顺序排列。</div>' +
+      '<div class="form-row"><label>C1 平台/模板 *</label><select class="select" id="admFTpl">' + tplOptions + '</select></div>' +
+      '<div class="tiny muted">保存后将按标准分类顺序排列；若该姓名不在「团队」表中，将被自动过滤，请先确认成员已在「团队」表登记。</div>' +
       '<div class="err-text" id="admFErr" style="margin-top:6px"></div>',
       function () {
         var name = $('#admFName').value.trim();
         var keyword = $('#admFKeyword').value.trim();
         var tpl = $('#admFTpl').value.trim() || '番号';
-        if (!name) { $('#admFErr').textContent = 'A1 姓名不能为空'; return false; }
-        if (!keyword) { $('#admFErr').textContent = 'B1 关键词不能为空'; return false; }
+        if (!name) { $('#admFErr').textContent = '姓名不能为空'; return false; }
+        if (!keyword) { $('#admFErr').textContent = '关键词不能为空'; return false; }
 
         var rows = model.rows.slice();
         if (isEdit) {
@@ -287,7 +290,7 @@
         }
         closeModal();
         window.CHStore.setRows(rows).then(function () {
-          toast('已保存并按固定模板顺序对齐', 'ok');
+          toast('已保存并同步对齐', 'ok');
         });
         return false;
       }
@@ -299,7 +302,7 @@
     var target = model.rows[rowIndex];
     if (!target) return;
     confirmModal('删除第 ' + target.rowNumber + ' 行',
-      '确定删除 <b>' + esc(target.name) + '</b> 的关键词「<b>' + esc(target.keyword) + '</b>」（模板：' + esc(target.template) + '）吗？',
+      '确定删除 <b>' + esc(target.name) + '</b> 的关键词「<b>' + esc(target.keyword) + '</b>」（分类：' + esc(target.template) + '）吗？',
       function () {
         var rows = model.rows.slice();
         rows.splice(rowIndex, 1);
@@ -310,28 +313,123 @@
     );
   }
 
-  /* ---------------- 成员汇总面板 ---------------- */
+  /* ---------------- 短链管理面板 ---------------- */
+  function renderLinksTable(model) {
+    var tbody = $('#admLBody');
+    if (!tbody) return;
+    var q = ($('#admLQ').value || '').trim().toLowerCase();
+    var allLinks = model.shortLinks || [];
+    var list = allLinks.filter(function (l) {
+      if (!q) return true;
+      return l.name.toLowerCase().indexOf(q) >= 0 ||
+             (l.group || '').toLowerCase().indexOf(q) >= 0 ||
+             l.slug.toLowerCase().indexOf(q) >= 0 ||
+             l.url.toLowerCase().indexOf(q) >= 0;
+    });
+
+    $('#admLCount').textContent = '当前筛选 ' + list.length + ' 条 / 总计 ' + allLinks.length + ' 条短链';
+
+    tbody.innerHTML = list.slice(0, 400).map(function (l) {
+      var idx = l.id - 1;
+      return '<tr>' +
+        '<td class="mono muted">第 ' + l.rowNumber + ' 行</td>' +
+        '<td><b>' + esc(l.name) + '</b></td>' +
+        '<td>' + (l.group ? '<span class="tag">' + esc(l.group) + '</span>' : '<span class="muted tiny">—</span>') + '</td>' +
+        '<td class="mono">' + esc(l.slug) + '</td>' +
+        '<td class="mono tiny" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + esc(l.url) + '">' + esc(l.url) + '</td>' +
+        '<td><div class="ops">' +
+          '<button class="btn sm" data-ledit="' + idx + '">编辑</button>' +
+          '<button class="btn sm danger" data-ldel="' + idx + '">删除</button>' +
+        '</div></td>' +
+      '</tr>';
+    }).join('') || '<tr><td colspan="6" style="text-align:center;color:var(--text-mute);padding:28px">暂无短链记录</td></tr>';
+
+    $$('#admLBody [data-ledit]').forEach(function (b) {
+      b.onclick = function () { openLinkModal(Number(b.dataset.ledit)); };
+    });
+    $$('#admLBody [data-ldel]').forEach(function (b) {
+      b.onclick = function () { deleteLink(Number(b.dataset.ldel)); };
+    });
+  }
+
+  function openLinkModal(linkIndex) {
+    var model = window.CHStore.getModel();
+    var links = model.shortLinks || [];
+    var isEdit = typeof linkIndex === 'number' && linkIndex >= 0 && linkIndex < links.length;
+    var cur = isEdit ? links[linkIndex] : { name: '', slug: '', url: '' };
+
+    openModal(isEdit ? ('编辑短链第 ' + cur.rowNumber + ' 行') : '新增成员短链',
+      '<div class="form-row"><label>A1 姓名 *（须在「团队」表中在册）</label><input class="input" id="admLName" value="' + esc(cur.name) + '" placeholder="输入成员姓名"></div>' +
+      '<div class="form-row"><label>B1 短链标识 *</label><input class="input" id="admLSlug" value="' + esc(cur.slug) + '" placeholder="例如：laya-zzl-tw"></div>' +
+      '<div class="form-row"><label>C1 地址 *</label><input class="input" id="admLUrl" value="' + esc(cur.url) + '" placeholder="https://app.adjust.com/..."></div>' +
+      '<div class="err-text" id="admFErr" style="margin-top:6px"></div>',
+      function () {
+        var name = $('#admLName').value.trim();
+        var slug = $('#admLSlug').value.trim();
+        var url  = $('#admLUrl').value.trim();
+        if (!name) { $('#admFErr').textContent = '姓名不能为空'; return false; }
+        if (!slug && !url) { $('#admFErr').textContent = '短链标识与地址不能同时为空'; return false; }
+
+        var next = links.slice();
+        if (isEdit) {
+          next[linkIndex] = { name: name, slug: slug, url: url };
+        } else {
+          next.push({ name: name, slug: slug, url: url });
+        }
+        closeModal();
+        window.CHStore.setShortLinks(next).then(function () {
+          toast('短链已保存并同步', 'ok');
+        });
+        return false;
+      }
+    );
+  }
+
+  function deleteLink(linkIndex) {
+    var model = window.CHStore.getModel();
+    var target = (model.shortLinks || [])[linkIndex];
+    if (!target) return;
+    confirmModal('删除第 ' + target.rowNumber + ' 行短链',
+      '确定删除 <b>' + esc(target.name) + '</b> 的短链「<b>' + esc(target.slug) + '</b>」吗？',
+      function () {
+        var next = (model.shortLinks || []).slice();
+        next.splice(linkIndex, 1);
+        window.CHStore.setShortLinks(next).then(function () {
+          toast('已删除该条短链', 'ok');
+        });
+      }
+    );
+  }
+
+  /* ---------------- 团队与成员汇总面板 ---------------- */
   function renderPeopleTable(model) {
     var q = ($('#admPQ').value || '').trim().toLowerCase();
     var list = model.people.filter(function (p) {
-      return !q || p.name.toLowerCase().indexOf(q) >= 0;
+      return !q || p.name.toLowerCase().indexOf(q) >= 0 || (p.group || '').toLowerCase().indexOf(q) >= 0;
     });
 
-    $('#admPCount').textContent = '共 ' + list.length + ' 人';
+    $('#admPCount').textContent = '共 ' + list.length + ' 名在册成员';
     $('#admPBody').innerHTML = list.map(function (p) {
       var tags = p.entries.map(function (e) {
         return '<span class="tag"><b style="color:var(--text)">' + esc(e.template) + '</b>: ' + esc(e.keyword) + '</span>';
-      }).join(' ');
+      });
+      (p.shortLinks || []).forEach(function (l) {
+        tags.push('<span class="tag" style="border-color:rgba(62,166,255,.45)"><b style="color:var(--brand-2)">短链</b>: ' + esc(l.slug) + '</span>');
+      });
+      if (!tags.length) {
+        tags.push('<span class="tiny muted">暂未分配暗号或短链</span>');
+      }
       return '<tr>' +
-        '<td style="width:120px"><b>' + esc(p.name) + '</b></td>' +
-        '<td style="width:80px" class="mono">' + p.entries.length + ' 条</td>' +
-        '<td><div style="display:flex;flex-wrap:wrap;gap:6px">' + tags + '</div></td>' +
-        '<td style="width:150px"><div class="ops">' +
+        '<td><b>' + esc(p.name) + '</b></td>' +
+        '<td>' + (p.group ? '<span class="tag">' + esc(p.group) + '</span>' : '<span class="muted tiny">—</span>') + '</td>' +
+        '<td class="mono">' + p.entries.length + '码 / ' + (p.shortLinks ? p.shortLinks.length : 0) + '链</td>' +
+        '<td><div style="display:flex;flex-wrap:wrap;gap:6px">' + tags.join(' ') + '</div></td>' +
+        '<td><div class="ops">' +
           '<button class="btn sm" data-pedit="' + esc(p.name) + '">改名</button>' +
-          '<button class="btn sm danger" data-pdel="' + esc(p.name) + '">删除</button>' +
+          '<button class="btn sm danger" data-pdel="' + esc(p.name) + '">清空记录</button>' +
         '</div></td>' +
       '</tr>';
-    }).join('') || '<tr><td colspan="4" style="text-align:center;color:var(--text-mute);padding:28px">暂无成员</td></tr>';
+    }).join('') || '<tr><td colspan="5" style="text-align:center;color:var(--text-mute);padding:28px">暂无成员</td></tr>';
 
     $$('#admPBody [data-pedit]').forEach(function (b) {
       b.onclick = function () {
@@ -339,15 +437,23 @@
         openModal('修改成员姓名',
           '<div class="form-row"><label>原姓名：' + esc(oldName) + '</label>' +
           '<input class="input" id="admPNewName" value="' + esc(oldName) + '" placeholder="输入新姓名"></div>' +
+          '<div class="tiny muted">提示：若该成员同时在在线「团队」表中，请记得在表格「团队」页同步改名，否则下次云端清洗会按团队表为准。</div>' +
           '<div class="err-text" id="admFErr"></div>',
           function () {
             var newName = $('#admPNewName').value.trim();
             if (!newName) { $('#admFErr').textContent = '姓名不能为空'; return false; }
-            var rows = window.CHStore.getModel().rows.map(function (r) {
+            var m = window.CHStore.getModel();
+            var rows = m.rows.map(function (r) {
               return r.name === oldName ? { name: newName, keyword: r.keyword, template: r.template } : r;
             });
+            var links = (m.shortLinks || []).map(function (l) {
+              return l.name === oldName ? { name: newName, slug: l.slug, url: l.url } : l;
+            });
             closeModal();
-            window.CHStore.setRows(rows).then(function () {
+            Promise.all([
+              window.CHStore.setRows(rows, { ignoreWhitelist: true }),
+              window.CHStore.setShortLinks(links, { ignoreWhitelist: true })
+            ]).then(function () {
               toast('已更新成员姓名', 'ok');
             });
             return false;
@@ -359,14 +465,17 @@
     $$('#admPBody [data-pdel]').forEach(function (b) {
       b.onclick = function () {
         var delName = b.dataset.pdel;
-        confirmModal('删除成员全部记录',
-          '确定删除「<b>' + esc(delName) + '</b>」名下的全部关键词行吗？',
+        confirmModal('清空成员全部暗号与短链',
+          '确定删除「<b>' + esc(delName) + '</b>」名下的全部暗号与短链记录吗？（若需连同在册名单一并移除，请直接在在线表格「团队」页删除该姓名）',
           function () {
-            var rows = window.CHStore.getModel().rows.filter(function (r) {
-              return r.name !== delName;
-            });
-            window.CHStore.setRows(rows).then(function () {
-              toast('已删除该成员全部记录', 'ok');
+            var m = window.CHStore.getModel();
+            var rows = m.rows.filter(function (r) { return r.name !== delName; });
+            var links = (m.shortLinks || []).filter(function (l) { return l.name !== delName; });
+            Promise.all([
+              window.CHStore.setRows(rows),
+              window.CHStore.setShortLinks(links)
+            ]).then(function () {
+              toast('已清空该成员名下暗号与短链', 'ok');
             });
           }
         );
@@ -378,7 +487,7 @@
   function handleBulkImport() {
     var rawText = $('#admBText').value || '';
     var defTpl = $('#admBTpl').value || '番号';
-    var mode = $('#admBMode').value || 'append'; // 'append' | 'replace'
+    var mode = $('#admBMode').value || 'append';
 
     var lines = rawText.split(/\r?\n/);
     var parsed = [];
@@ -387,7 +496,6 @@
     lines.forEach(function (raw, idx) {
       var line = raw.trim();
       if (!line || line.charAt(0) === '#') return;
-      // 支持 Tab 分隔（直接从 Excel/Google 表格复制的三列）或逗号/空格分隔
       var parts = line.indexOf('\t') >= 0
         ? line.split('\t').map(function (s) { return s.trim(); })
         : line.split(/[,，\s]+/).filter(Boolean);
@@ -396,7 +504,7 @@
         skipped.push('第 ' + (idx + 1) + ' 行缺少关键词：' + line);
         return;
       }
-      var name = parts[0];
+      var name = window.CHStore.normalizePersonName(parts[0]);
       var keyword = parts[1];
       var tpl = parts[2] ? window.CHStore.normalizeTemplateName(parts[2]) : defTpl;
 
@@ -405,7 +513,7 @@
     });
 
     if (!parsed.length) {
-      toast('未识别到有效行，请检查格式（姓名 关键词 [模板]）', 'err');
+      toast('未识别到有效行，请检查格式（姓名 关键词 [分类]）', 'err');
       return;
     }
 
@@ -414,13 +522,13 @@
 
     window.CHStore.setRows(combined).then(function (newModel) {
       var msg = '<div class="tag" style="background:rgba(40,199,111,.16);border-color:rgba(40,199,111,.5);color:var(--ok)">' +
-        '成功导入 ' + parsed.length + ' 行！当前总表共 ' + newModel.rows.length + ' 行（已按 7 大模板顺序排好）</div>';
+        '已处理 ' + parsed.length + ' 行！当前总表共 ' + newModel.rows.length + ' 行（已按分类顺序排好并自动过滤非在册成员）</div>';
       if (skipped.length) {
         msg += '<div class="tiny muted" style="margin-top:8px">跳过 ' + skipped.length + ' 行：<br>' +
           skipped.slice(0, 15).map(esc).join('<br>') + '</div>';
       }
       $('#admBResult').innerHTML = msg;
-      toast('批量导入成功（' + parsed.length + ' 行）', 'ok');
+      toast('批量导入完成', 'ok');
     });
   }
 
@@ -482,13 +590,12 @@
       if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
       return s;
     };
-    var lines = ['姓名,关键词,模板'];
+    var lines = ['姓名,关键词,平台/模板'];
     model.rows.forEach(function (r) {
       lines.push([csvEscape(r.name), csvEscape(r.keyword), csvEscape(r.template)].join(','));
     });
-    // 添加 UTF-8 BOM，确保 Excel 打开中文不乱码
-    downloadFile('暗号表_A姓名_B关键词_C模板.csv', '\uFEFF' + lines.join('\r\n'), 'text/csv;charset=utf-8');
-    toast('已导出 CSV 表格（严格按番号→聊天→对比→任务→新模版→备用→备用 2 排序）', 'ok');
+    downloadFile('暗号总表_A姓名_B关键词_C模板.csv', '\uFEFF' + lines.join('\r\n'), 'text/csv;charset=utf-8');
+    toast('已导出总表 CSV', 'ok');
   }
 
   function exportDataJs() {
@@ -496,30 +603,37 @@
     var cfg = window.CHStore.getBindConfig();
     var code =
       '/**\n' +
-      ' * CipherHub Beta · 默认配置与初始一维表格数据 (由后台导出生成)\n' +
+      ' * CipherHub Beta · 默认配置与三表快照数据 (由后台导出生成)\n' +
       ' */\n' +
       '(function () {\n' +
       '  \'use strict\';\n\n' +
       '  window.CH_BETA_CONFIG = ' + JSON.stringify({
         appsScriptUrl: cfg.appsScriptUrl || '',
         sheetUrl: cfg.sheetUrl || '',
-        sheetName: cfg.sheetName || '',
+        sheetName: cfg.sheetName || '总表',
         adminPass: cfg.adminToken || 'admin123',
-        autoSyncSec: cfg.autoSyncSec || 30
+        autoSyncSec: cfg.autoSyncSec || 25
       }, null, 2) + ';\n\n' +
       '  window.TEMPLATE_ORDER = ' + JSON.stringify(window.TEMPLATE_ORDER) + ';\n\n' +
       '  window.TEMPLATES = ' + JSON.stringify(window.TEMPLATES, null, 2) + ';\n\n' +
+      '  window.PERSON_NAME_ALIAS = ' + JSON.stringify(window.PERSON_NAME_ALIAS || { '驼圆圆': '骆圆圆', '许鹏云': '许鹏雲' }, null, 2) + ';\n\n' +
       '  window.TEMPLATE_ALIAS = ' + JSON.stringify(window.TEMPLATE_ALIAS, null, 2) + ';\n\n' +
       '  window.DEFAULT_DATA = ' + JSON.stringify({
         updatedAt: new Date().toISOString(),
         settings: model.settings,
+        teams: (model.teams || []).map(function (t) {
+          return { name: t.name, count: t.count, members: t.members };
+        }),
         rows: model.rows.map(function (r) {
           return { name: r.name, keyword: r.keyword, template: r.template };
+        }),
+        shortLinks: (model.shortLinks || []).map(function (l) {
+          return { name: l.name, slug: l.slug, url: l.url };
         })
       }, null, 2) + ';\n' +
       '})();\n';
     downloadFile('data.js', code, 'application/javascript;charset=utf-8');
-    toast('已导出 js/data.js，覆盖仓库 js/data.js 后所有人打开即为该配置与数据', 'ok');
+    toast('已导出 js/data.js（含三表完整快照）', 'ok');
   }
 
   /* ---------------- 弹窗控制 ---------------- */
@@ -576,12 +690,12 @@
       };
     });
 
-    // 在线表格绑定保存与拉取
+    // 保存绑定并拉取
     $('#admBindSavePull').onclick = function () {
       var cfg = readBindForm();
       window.CHStore.saveBindConfig(cfg);
       if (!cfg.appsScriptUrl && !cfg.sheetUrl) {
-        toast('已保存配置（当前未填写在线表格链接，使用本地数据）', 'ok');
+        toast('已保存配置（当前未填写在线表格链接，使用本地快照）', 'ok');
         renderAll();
         return;
       }
@@ -590,18 +704,43 @@
       btn.textContent = '正在从在线表格同步…';
       window.CHStore.pullFromOnlineSheet()
         .then(function (m) {
-          toast('同步成功！共拉取 ' + m.rows.length + ' 行数据（已与前台统一）', 'ok');
+          toast('同步成功！团队 ' + m.people.length + ' 人，总表 ' + m.rows.length + ' 条，短链 ' + (m.shortLinks || []).length + ' 条', 'ok');
         })
         .catch(function (err) {
           toast('拉取失败：' + err.message, 'err');
         })
         .then(function () {
           btn.disabled = false;
-          btn.textContent = '🔗 保存绑定并立即从在线表格拉取';
+          btn.textContent = '🔗 保存并立即从在线表格同步';
         });
     };
 
-    // 将当前网页数据推送到在线表格
+    // 按「团队」表名单一键清理云端总表与短链
+    var cleanBtn = $('#admBindCleanByTeam');
+    if (cleanBtn) {
+      cleanBtn.onclick = function () {
+        confirmModal('按「团队」表名单清理云端总表与短链',
+          '此操作会以云端 Google 表格的 <b>「团队」</b> 在册组员为唯一准绳，彻底清除 <b>「总表」</b> 与 <b>「短链」</b> 中所有已不在团队表内的旧人员记录，并自动修正笔误。确定执行吗？',
+          function () {
+            cleanBtn.disabled = true;
+            cleanBtn.textContent = '正在清理云端表格…';
+            window.CHStore.cleanByTeamCloud()
+              .then(function (m) {
+                toast('云端清理完成！保留团队 ' + m.people.length + ' 人、总表 ' + m.rows.length + ' 条、短链 ' + (m.shortLinks || []).length + ' 条', 'ok');
+              })
+              .catch(function (err) {
+                toast('清理失败：' + err.message, 'err');
+              })
+              .then(function () {
+                cleanBtn.disabled = false;
+                cleanBtn.textContent = '🧹 按「团队」表名单清理云端总表与短链';
+              });
+          }
+        );
+      };
+    }
+
+    // 推送网页数据到在线表格
     $('#admBindPushCloud').onclick = function () {
       var cfg = readBindForm();
       window.CHStore.saveBindConfig(cfg);
@@ -610,49 +749,31 @@
       btn.textContent = '正在写入在线表格…';
       window.CHStore.pushToOnlineSheet('SAVE_ROWS')
         .then(function (m) {
-          toast('已将 ' + m.rows.length + ' 行数据按 7 大模板顺序写入在线表格 A/B/C 列！', 'ok');
+          toast('已将总表 ' + m.rows.length + ' 条、短链 ' + (m.shortLinks || []).length + ' 条写入在线表格！', 'ok');
         })
         .catch(function (err) {
           toast('写入失败：' + err.message, 'err');
         })
         .then(function () {
           btn.disabled = false;
-          btn.textContent = '☁️ 将当前网页数据推送到在线表格';
+          btn.textContent = '☁️ 推送当前网页数据到在线表格';
         });
     };
 
-    // 从 7 个分表合并到总表
-    $('#admBindMergeTabs').onclick = function () {
-      var cfg = readBindForm();
-      window.CHStore.saveBindConfig(cfg);
-      var btn = $('#admBindMergeTabs');
-      btn.disabled = true;
-      window.CHStore.pushToOnlineSheet('MERGE_TABS')
-        .then(function (m) {
-          toast('已按「番号→聊天→对比→任务→新模版→备用→备用 2」顺序合并子表，共 ' + m.rows.length + ' 行！', 'ok');
-        })
-        .catch(function (err) {
-          toast('合并失败：' + err.message, 'err');
-        })
-        .then(function () {
-          btn.disabled = false;
-        });
-    };
-
-    // 在线表格一键重排
+    // 在线总表按分类重排
     $('#admBindSortCloud').onclick = function () {
       var cfg = readBindForm();
       window.CHStore.saveBindConfig(cfg);
       window.CHStore.pushToOnlineSheet('SORT_SHEET')
         .then(function (m) {
-          toast('已将在线表格按 7 大模板顺序重新整理对齐（共 ' + m.rows.length + ' 行）', 'ok');
+          toast('已将在线总表按固定分类重排对齐（共 ' + m.rows.length + ' 行）', 'ok');
         })
         .catch(function (err) {
           toast('整理失败：' + err.message, 'err');
         });
     };
 
-    // 一一对应总表操作
+    // 总表筛选与操作
     $('#admRQ').addEventListener('input', function () {
       renderRowsTable(window.CHStore.getModel());
     });
@@ -665,9 +786,21 @@
     $('#admRSort').onclick = function () {
       var rows = window.CHStore.getModel().rows;
       window.CHStore.setRows(rows).then(function () {
-        toast('已按「番号 → 聊天 → 对比 → 任务 → 新模版 → 备用 → 备用 2」重新对齐行号', 'ok');
+        toast('已按固定分类顺序重新对齐', 'ok');
       });
     };
+
+    // 短链筛选与新增
+    var admLQ = $('#admLQ');
+    if (admLQ) {
+      admLQ.addEventListener('input', function () {
+        renderLinksTable(window.CHStore.getModel());
+      });
+    }
+    var admLAdd = $('#admLAdd');
+    if (admLAdd) {
+      admLAdd.onclick = function () { openLinkModal(-1); };
+    }
 
     // 成员搜索
     $('#admPQ').addEventListener('input', function () {
@@ -709,17 +842,17 @@
       });
     };
 
-    // 导出按钮
+    // 导出与重置
     $('#admExpCsv').onclick = exportCsv;
     $('#admExpDataJs').onclick = exportDataJs;
     $('#admResetDefault').onclick = function () {
-      confirmModal('恢复默认示例数据', '将清除本机缓存的本地改动并恢复初始示例数据（若已绑定在线表格，刷新后仍会拉取在线表格）。确定？', function () {
+      confirmModal('恢复默认快照数据', '将清除本机缓存并恢复内置三表快照（若已绑定在线表格，刷新后仍会实时拉取在线表格）。确定？', function () {
         window.CHStore.resetToDefault();
-        toast('已恢复默认数据', 'ok');
+        toast('已恢复默认快照', 'ok');
       });
     };
 
-    // 弹窗通用关闭
+    // 弹窗关闭
     $('#admMClose').onclick = closeModal;
     $('#admMCancel').onclick = closeModal;
     $('#admMask').addEventListener('mousedown', function (e) {
@@ -739,4 +872,3 @@
 
   ensureMounted();
 })();
-

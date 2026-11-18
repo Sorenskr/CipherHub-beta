@@ -1,24 +1,71 @@
 /**
- * CipherHub Beta · 在线表格实时同步与 1:1 数据中心 (sheet-sync.js)
+ * CipherHub Beta · 三表打通实时同步与数据中心 (sheet-sync.js)
  *
  * 核心职责：
- *   1. 维护与在线表格完全一一对应的三列数据：A1 姓名 (name) | B1 关键词 (keyword) | C1 模板 (template)
- *   2. 严格执行固定排序规则：
- *      【先放完「番号」表所有人，再放「聊天」表的，接着是对比、任务、新模版、备用、备用 2，不会乱】
- *   3. 支持两种在线表格实时联动方式：
- *      - 方式 A（推荐，双向读写）：绑定 Google Apps Script Web App URL (Code.gs)，支持实时拉取 + 后台网页直接改表写回云端
- *      - 方式 B（免脚本直连只读）：直接粘贴 Google Sheets 分享链接或表格 ID，通过 GViz JSONP / CSV 免跨域实时拉取最新表格内容
- *   4. 支持切回页面自动同步 (visibilitychange) 与定时轮询同步，确保在线表格修改后前台实时统一。
+ *   1. 彻底清除历史 v1 本地残留缓存，确保网页数据与在线表格 100% 同步统一。
+ *   2. 同步联动《暗号表》的三张工作表：
+ *      - 「团队」：各小组（慕杰组、李俊鑫组等）及在册组员名单（唯一人员白名单）
+ *      - 「总表」：A1 姓名 | B1 关键词 | C1 平台/模板（按固定分类顺序排列）
+ *      - 「短链」：A1 姓名 | B1 短链   | C1 地址
+ *   3. 严格过滤机制：若线上表格中删除了某条数据或某位成员，本地拉取时全量覆盖，绝不残留旧数据。
+ *   4. 支持 Apps Script Web App 双向读写与 Google Sheets GViz 三表并行直连降级读取。
  */
 (function () {
   'use strict';
 
-  var BIND_STORAGE_KEY = 'ch_beta_bind_cfg_v1';
-  var LOCAL_DATA_KEY   = 'ch_beta_local_data_v1';
+  // 清除旧版 v1 遗留缓存，防止历史测试数据或已删除旧人数据残留
+  try {
+    localStorage.removeItem('ch_beta_local_data_v1');
+    localStorage.removeItem('ch_beta_bind_cfg_v1');
+  } catch (e) {}
 
-  var TEMPLATE_ORDER = window.TEMPLATE_ORDER || ['番号', '聊天', '对比', '任务', '新模版', '备用', '备用 2'];
-  var BASE_TEMPLATES = window.TEMPLATES || [];
-  var ALIAS = window.TEMPLATE_ALIAS || {};
+  var BIND_STORAGE_KEY = 'ch_beta_bind_cfg_v2';
+  var LOCAL_DATA_KEY   = 'ch_beta_local_data_v2';
+
+  var TEMPLATE_ORDER = window.TEMPLATE_ORDER || ['番号', '聊天', '走光', '任务', '新模版', '备用', '备用2', '创新'];
+  var BASE_TEMPLATES = window.TEMPLATES || [
+    { id: 'fanhao',    name: '番号',   short: '番',  color: '#7c5cff', order: 1 },
+    { id: 'liaotian',  name: '聊天',   short: '聊',  color: '#00c8b4', order: 2 },
+    { id: 'zouguang',  name: '走光',   short: '走',  color: '#ff5c8a', order: 3 },
+    { id: 'renwu',     name: '任务',   short: '任',  color: '#3ea6ff', order: 4 },
+    { id: 'xinmoban',  name: '新模版', short: '新',  color: '#e1306c', order: 5 },
+    { id: 'beiyong',   name: '备用',   short: '备',  color: '#ffb020', order: 6 },
+    { id: 'beiyong2',  name: '备用2',  short: '备2', color: '#8b93a7', order: 7 },
+    { id: 'chuangxin', name: '创新',   short: '创',  color: '#28c76f', order: 8 }
+  ];
+  var ALIAS = window.TEMPLATE_ALIAS || {
+    '番号': '番号',
+    'fanhao': '番号',
+    '聊天': '聊天',
+    '聊天记录': '聊天',
+    'liaotian': '聊天',
+    '走光': '走光',
+    'zouguang': '走光',
+    '任务': '任务',
+    'renwu': '任务',
+    '新模版': '新模版',
+    '新模板': '新模版',
+    'xinmoban': '新模版',
+    '备用': '备用',
+    '备用1': '备用',
+    '备用 1': '备用',
+    'beiyong': '备用',
+    '备用2': '备用2',
+    '备用 2': '备用2',
+    'beiyong2': '备用2',
+    '创新': '创新',
+    'chuangxin': '创新'
+  };
+  var PERSON_ALIAS = window.PERSON_NAME_ALIAS || {
+    '驼圆圆': '骆圆圆',
+    '许鹏云': '许鹏雲'
+  };
+
+  function normalizePersonName(raw) {
+    var s = String(raw == null ? '' : raw).trim();
+    if (!s) return '';
+    return PERSON_ALIAS[s] || s;
+  }
 
   function normalizeTemplateName(raw) {
     var s = String(raw == null ? '' : raw).trim();
@@ -35,17 +82,56 @@
     return idx >= 0 ? idx : 999;
   }
 
-  /**
-   * 严格按照「番号 → 聊天 → 对比 → 任务 → 新模版 → 备用 → 备用 2」顺序排列
-   * 同一个模板内部保持原有的上下行顺序（稳定排序），并生成对应的表格行号 rowNumber (从第 2 行开始，因第 1 行是 A1/B1/C1 表头)
-   */
-  function sortRowsByTemplateOrder(rows) {
+  function normalizeTeamsData(rawTeams) {
+    var teams = [];
+    var memberGroupMap = {};
+    var validSet = {};
+
+    (Array.isArray(rawTeams) ? rawTeams : []).forEach(function (t) {
+      if (!t || !t.name) return;
+      var teamName = String(t.name).trim();
+      if (!teamName) return;
+      var members = [];
+      var seen = {};
+      (Array.isArray(t.members) ? t.members : []).forEach(function (m) {
+        var name = normalizePersonName(m);
+        if (!name || name === '组名称' || name === '组员人数') return;
+        if (!seen[name]) {
+          seen[name] = true;
+          members.push(name);
+        }
+        if (!memberGroupMap[name]) {
+          memberGroupMap[name] = teamName;
+        }
+        validSet[name] = true;
+      });
+      teams.push({
+        name: teamName,
+        count: members.length,
+        members: members
+      });
+    });
+
+    return {
+      teams: teams,
+      memberGroupMap: memberGroupMap,
+      validSet: validSet,
+      validCount: Object.keys(validSet).length
+    };
+  }
+
+  function sortRowsByTemplateOrder(rows, validSet, memberGroupMap) {
     if (!Array.isArray(rows)) return [];
+    var hasWhitelist = Boolean(validSet && Object.keys(validSet).length > 0);
+    var seen = {};
+
     return rows
       .map(function (r, i) {
-        var name = String(r && r.name !== undefined ? r.name : (r && r[0] !== undefined ? r[0] : '')).trim();
-        var keyword = String(r && r.keyword !== undefined ? r.keyword : (r && r.value !== undefined ? r.value : (r && r[1] !== undefined ? r[1] : ''))).trim();
-        var rawTpl = r && r.template !== undefined ? r.template : (r && r.platformName !== undefined ? r.platformName : (r && r[2] !== undefined ? r[2] : '番号'));
+        var rawName = r && r.name !== undefined ? r.name : (r && r[0] !== undefined ? r[0] : '');
+        var rawKw   = r && r.keyword !== undefined ? r.keyword : (r && r.value !== undefined ? r.value : (r && r[1] !== undefined ? r[1] : ''));
+        var rawTpl  = r && r.template !== undefined ? r.template : (r && r.platformName !== undefined ? r.platformName : (r && r[2] !== undefined ? r[2] : '番号'));
+        var name = normalizePersonName(rawName);
+        var keyword = String(rawKw == null ? '' : rawKw).trim();
         var tpl = normalizeTemplateName(rawTpl);
         return {
           _origIdx: i,
@@ -57,10 +143,11 @@
       })
       .filter(function (item) {
         if (!item.name && !item.keyword) return false;
-        // 自动过滤误传入的表头行
-        if (item.name === '姓名' && (item.keyword === '关键词' || item.keyword === '暗号') && (item.template === '模板' || item.template === '模版' || item.template === '番号')) {
-          return false;
-        }
+        if (item.name === '姓名' && (item.keyword === '关键词' || item.keyword === '暗号')) return false;
+        if (hasWhitelist && !validSet[item.name]) return false;
+        var dupKey = item.name + '||' + item.keyword + '||' + item.template;
+        if (seen[dupKey]) return false;
+        seen[dupKey] = true;
         return true;
       })
       .sort(function (a, b) {
@@ -73,17 +160,59 @@
       .map(function (item, idx) {
         return {
           id: idx + 1,
-          rowNumber: idx + 2, // A1/B1/C1 为第 1 行，数据从第 2 行开始一一对应
+          rowNumber: idx + 2,
           name: item.name,
+          group: (memberGroupMap && memberGroupMap[item.name]) || '',
           keyword: item.keyword,
           template: item.template
         };
       });
   }
 
-  /**
-   * 从 Google 表格链接或 ID 字符串中提取 Spreadsheet ID 与 gid
-   */
+  function detectLinkChannelTag(slug) {
+    var s = String(slug || '').toLowerCase();
+    if (/-tw\b/.test(s) || s.slice(-3) === '-tw') return 'TW';
+    if (/-sp\b/.test(s) || s.slice(-3) === '-sp') return 'SP';
+    return '短链';
+  }
+
+  function normalizeShortLinks(links, validSet, memberGroupMap) {
+    if (!Array.isArray(links)) return [];
+    var hasWhitelist = Boolean(validSet && Object.keys(validSet).length > 0);
+    var seen = {};
+    var out = [];
+
+    links.forEach(function (l) {
+      var rawName = l && l.name !== undefined ? l.name : (l && l[0] !== undefined ? l[0] : '');
+      var rawSlug = l && l.slug !== undefined ? l.slug : (l && l[1] !== undefined ? l[1] : '');
+      var rawUrl  = l && l.url !== undefined ? l.url : (l && l[2] !== undefined ? l[2] : '');
+
+      var name = normalizePersonName(rawName);
+      var slug = String(rawSlug == null ? '' : rawSlug).trim();
+      var url  = String(rawUrl == null ? '' : rawUrl).trim();
+
+      if (!name || (!slug && !url)) return;
+      if (name === '姓名' && (slug === '短链' || url === '地址')) return;
+      if (hasWhitelist && !validSet[name]) return;
+
+      var dupKey = name + '||' + slug + '||' + url;
+      if (seen[dupKey]) return;
+      seen[dupKey] = true;
+
+      out.push({
+        id: out.length + 1,
+        rowNumber: out.length + 2,
+        name: name,
+        group: (memberGroupMap && memberGroupMap[name]) || '',
+        slug: slug,
+        url: url,
+        channelTag: detectLinkChannelTag(slug)
+      });
+    });
+
+    return out;
+  }
+
   function parseSheetInput(input) {
     var s = String(input || '').trim();
     if (!s) return { spreadsheetId: '', gid: '' };
@@ -107,11 +236,11 @@
     } catch (e) {}
 
     return {
-      appsScriptUrl: String(saved.appsScriptUrl || def.appsScriptUrl || '').trim(),
-      sheetUrl:      String(saved.sheetUrl || def.sheetUrl || '').trim(),
-      sheetName:     String(saved.sheetName || def.sheetName || '').trim(),
-      adminToken:    String(saved.adminToken || def.adminPass || 'admin123').trim(),
-      autoSyncSec:   saved.autoSyncSec !== undefined ? Number(saved.autoSyncSec) : Number(def.autoSyncSec || 30),
+      appsScriptUrl:  String(saved.appsScriptUrl !== undefined ? saved.appsScriptUrl : (def.appsScriptUrl || '')).trim(),
+      sheetUrl:       String(saved.sheetUrl !== undefined ? saved.sheetUrl : (def.sheetUrl || '')).trim(),
+      sheetName:      String(saved.sheetName !== undefined ? saved.sheetName : (def.sheetName || '')).trim(),
+      adminToken:     String(saved.adminToken || def.adminPass || 'admin123').trim(),
+      autoSyncSec:    saved.autoSyncSec !== undefined ? Number(saved.autoSyncSec) : Number(def.autoSyncSec !== undefined ? def.autoSyncSec : 25),
       autoPushOnEdit: saved.autoPushOnEdit !== undefined ? Boolean(saved.autoPushOnEdit) : true
     };
   }
@@ -126,16 +255,18 @@
   }
 
   function loadLocalData() {
-    var def = window.DEFAULT_DATA || { settings: {}, rows: [] };
+    var def = window.DEFAULT_DATA || { settings: {}, teams: [], rows: [], shortLinks: [] };
     try {
       var raw = localStorage.getItem(LOCAL_DATA_KEY);
       if (raw) {
         var parsed = JSON.parse(raw);
         if (parsed && Array.isArray(parsed.rows)) {
           return {
-            updatedAt: parsed.updatedAt || def.updatedAt,
+            updatedAt: parsed.updatedAt || def.updatedAt || new Date().toISOString(),
             settings: Object.assign({}, def.settings, parsed.settings || {}),
-            rows: sortRowsByTemplateOrder(parsed.rows),
+            teams: Array.isArray(parsed.teams) ? parsed.teams : (def.teams || []),
+            rows: parsed.rows,
+            shortLinks: Array.isArray(parsed.shortLinks) ? parsed.shortLinks : (def.shortLinks || []),
             source: parsed.source || 'local'
           };
         }
@@ -144,17 +275,19 @@
     return {
       updatedAt: def.updatedAt || new Date().toISOString(),
       settings: JSON.parse(JSON.stringify(def.settings || {})),
-      rows: sortRowsByTemplateOrder(def.rows || []),
+      teams: JSON.parse(JSON.stringify(def.teams || [])),
+      rows: JSON.parse(JSON.stringify(def.rows || [])),
+      shortLinks: JSON.parse(JSON.stringify(def.shortLinks || [])),
       source: 'default'
     };
   }
 
   var state = loadLocalData();
   var syncMeta = {
-    status: 'idle', // 'idle' | 'syncing' | 'ok' | 'err'
+    status: 'idle',
     lastSyncAt: '',
     error: '',
-    mode: '', // 'gas' | 'gviz' | 'local'
+    mode: '',
     sheetTitle: ''
   };
   var listeners = [];
@@ -165,7 +298,9 @@
       localStorage.setItem(LOCAL_DATA_KEY, JSON.stringify({
         updatedAt: state.updatedAt,
         settings: state.settings,
+        teams: state.teams,
         rows: state.rows,
+        shortLinks: state.shortLinks,
         source: state.source
       }));
     } catch (e) {}
@@ -178,11 +313,14 @@
     });
   }
 
-  /**
-   * 将一维 rows (A1姓名 / B1关键词 / C1模板) 转换为前台与后台所需的完整结构
-   */
   function buildDerivedModel() {
-    var rows = sortRowsByTemplateOrder(state.rows);
+    var teamInfo = normalizeTeamsData(state.teams);
+    var validSet = teamInfo.validCount > 0 ? teamInfo.validSet : null;
+    var memberGroupMap = teamInfo.memberGroupMap;
+
+    var rows = sortRowsByTemplateOrder(state.rows, validSet, memberGroupMap);
+    var shortLinks = normalizeShortLinks(state.shortLinks, validSet, memberGroupMap);
+
     var tplMap = {};
     var templates = BASE_TEMPLATES.map(function (t) {
       var copy = Object.assign({}, t, { count: 0 });
@@ -190,13 +328,12 @@
       return copy;
     });
 
-    // 若表格 C 列出现了 7 个标准模板之外的自定义模板名，自动追加在 7 个标准模板之后
     rows.forEach(function (r) {
       if (!tplMap[r.template]) {
         var customTpl = {
           id: 'tpl_' + templates.length,
           name: r.template,
-          short: r.template.slice(0, 1),
+          short: String(r.template).slice(0, 1),
           color: '#6e56cf',
           order: templates.length + 1,
           count: 0
@@ -207,25 +344,44 @@
       tplMap[r.template].count++;
     });
 
-    // 按姓名聚合生成成员列表（保持成员在表内首次出现的顺序）
     var peopleMap = {};
     var people = [];
     var entries = [];
-    var defaultGroup = (state.settings && state.settings.groups && state.settings.groups[0]) || 'Laya';
+
+    // 优先按「团队」表在册成员初始化，保证新成员（哪怕暂未配暗号）也能在对应小组下查到
+    teamInfo.teams.forEach(function (team) {
+      team.members.forEach(function (memberName) {
+        if (!peopleMap[memberName]) {
+          var p = {
+            id: people.length + 1,
+            name: memberName,
+            group: team.name,
+            entries: [],
+            shortLinks: []
+          };
+          peopleMap[memberName] = p;
+          people.push(p);
+        }
+      });
+    });
+
+    function ensurePerson(name) {
+      var nm = name || '未命名';
+      if (!peopleMap[nm]) {
+        peopleMap[nm] = {
+          id: people.length + 1,
+          name: nm,
+          group: memberGroupMap[nm] || '',
+          entries: [],
+          shortLinks: []
+        };
+        people.push(peopleMap[nm]);
+      }
+      return peopleMap[nm];
+    }
 
     rows.forEach(function (r, idx) {
-      var personName = r.name || '未命名';
-      var person = peopleMap[personName];
-      if (!person) {
-        person = {
-          id: people.length + 1,
-          name: personName,
-          group: defaultGroup,
-          entries: []
-        };
-        peopleMap[personName] = person;
-        people.push(person);
-      }
+      var person = ensurePerson(r.name);
       var tplInfo = tplMap[r.template] || templates[0];
       var entry = {
         id: idx + 1,
@@ -233,16 +389,45 @@
         personId: person.id,
         personName: person.name,
         name: person.name,
+        group: person.group,
         keyword: r.keyword,
         value: r.keyword,
         template: r.template,
-        platformId: tplInfo.id,
-        platformName: tplInfo.name,
-        color: tplInfo.color,
-        order: tplInfo.order
+        platformId: tplInfo ? tplInfo.id : 'custom',
+        platformName: tplInfo ? tplInfo.name : r.template,
+        color: tplInfo ? tplInfo.color : '#7c5cff',
+        order: tplInfo ? tplInfo.order : 99
       };
       person.entries.push(entry);
       entries.push(entry);
+    });
+
+    shortLinks.forEach(function (l) {
+      var person = ensurePerson(l.name);
+      person.shortLinks.push(l);
+    });
+
+    // 补全每个团队的暗号与短链统计
+    var teams = teamInfo.teams.map(function (t) {
+      var entryCount = 0;
+      var linkCount = 0;
+      var activeMembers = 0;
+      t.members.forEach(function (m) {
+        var p = peopleMap[m];
+        if (p) {
+          entryCount += p.entries.length;
+          linkCount += p.shortLinks.length;
+          if (p.entries.length > 0 || p.shortLinks.length > 0) activeMembers++;
+        }
+      });
+      return {
+        name: t.name,
+        count: t.members.length,
+        members: t.members,
+        entryCount: entryCount,
+        shortLinkCount: linkCount,
+        activeMembers: activeMembers
+      };
     });
 
     var byTemplate = {};
@@ -256,13 +441,18 @@
       settings: state.settings,
       templateOrder: TEMPLATE_ORDER.slice(),
       templates: templates,
+      teams: teams,
+      memberGroupMap: memberGroupMap,
       rows: rows,
+      shortLinks: shortLinks,
       people: people,
       entries: entries,
       stats: {
         people: people.length,
+        teams: teams.length,
         entries: entries.length,
         rows: rows.length,
+        shortLinks: shortLinks.length,
         templates: templates.length,
         byTemplate: byTemplate,
         updatedAt: state.updatedAt
@@ -271,15 +461,15 @@
   }
 
   /**
-   * 方式 B：通过 Google Visualization JSONP 免跨域直接读取公开 Google 表格
+   * 底层 GViz JSONP 读取指定工作表
    */
-  function fetchGoogleSheetViaGviz(spreadsheetId, gid, sheetName) {
+  function fetchGvizTable(spreadsheetId, gid, sheetName, headersCount) {
     return new Promise(function (resolve, reject) {
-      var cbName = '__ch_gviz_cb_' + Date.now() + '_' + Math.floor(Math.random() * 10000);
+      var cbName = '__ch_gviz_cb_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
       var script = document.createElement('script');
       var timer = setTimeout(function () {
         cleanup();
-        reject(new Error('直接读取 Google 表格超时，请确认表格已开启「知道链接的任何人可查看」或配置 Apps Script 链接'));
+        reject(new Error('读取 Google 表格超时（' + (sheetName || gid || '主表') + '）'));
       }, 12000);
 
       function cleanup() {
@@ -295,34 +485,14 @@
           reject(new Error(errMsg));
           return;
         }
-        var table = resp.table || {};
-        var cols = table.cols || [];
-        var rawRows = table.rows || [];
-        var parsed = [];
-
-        // 检查列标题是否被识别到了 cols.label 中
-        var colLabels = cols.map(function (c) { return String((c && c.label) || '').trim(); });
-        for (var i = 0; i < rawRows.length; i++) {
-          var c = (rawRows[i] && rawRows[i].c) || [];
-          var v0 = c[0] && (c[0].f !== undefined && c[0].f !== null ? c[0].f : c[0].v);
-          var v1 = c[1] && (c[1].f !== undefined && c[1].f !== null ? c[1].f : c[1].v);
-          var v2 = c[2] && (c[2].f !== undefined && c[2].f !== null ? c[2].f : c[2].v);
-          var name = String(v0 == null ? '' : v0).trim();
-          var keyword = String(v1 == null ? '' : v1).trim();
-          var tpl = normalizeTemplateName(v2 == null ? (sheetName || '番号') : v2);
-          if (!name && !keyword) continue;
-          if (name === '姓名' && (keyword === '关键词' || keyword === '暗号')) continue;
-          parsed.push({ name: name, keyword: keyword, template: tpl });
-        }
-        resolve({
-          ok: true,
-          rows: sortRowsByTemplateOrder(parsed),
-          colLabels: colLabels
-        });
+        resolve(resp.table || { cols: [], rows: [] });
       };
 
       var url = 'https://docs.google.com/spreadsheets/d/' + encodeURIComponent(spreadsheetId) +
         '/gviz/tq?tqx=responseHandler:' + cbName;
+      if (headersCount !== undefined && headersCount !== null) {
+        url += '&headers=' + encodeURIComponent(headersCount);
+      }
       if (sheetName) {
         url += '&sheet=' + encodeURIComponent(sheetName);
       } else if (gid) {
@@ -333,17 +503,128 @@
       script.src = url;
       script.onerror = function () {
         cleanup();
-        reject(new Error('无法连接 Google 表格，请检查网络或表格权限（需设为「知道链接的任何人可查看」）'));
+        reject(new Error('无法连接 Google 表格，请检查网络或表格公开权限'));
       };
       document.head.appendChild(script);
     });
   }
 
-  /**
-   * 从绑定的在线表格实时拉取最新数据并同步到前台
-   */
-  function pullFromOnlineSheet(opts) {
-    opts = opts || {};
+  function cellVal(cell) {
+    if (!cell) return '';
+    var v = (cell.f !== undefined && cell.f !== null) ? cell.f : cell.v;
+    return v == null ? '' : String(v).trim();
+  }
+
+  function fetchAllSheetsViaGviz(spreadsheetId, gid, mainSheetName) {
+    var targetMain = mainSheetName || '总表';
+    var pMain = fetchGvizTable(spreadsheetId, gid, targetMain, 1);
+    var pLinks = fetchGvizTable(spreadsheetId, '', '短链', 1).catch(function () { return null; });
+    var pTeams = fetchGvizTable(spreadsheetId, '', '团队', 1).catch(function () { return null; });
+
+    return Promise.all([pMain, pLinks, pTeams]).then(function (results) {
+      var mainTable = results[0];
+      var linkTable = results[1];
+      var teamTable = results[2];
+
+      // 1. 解析「总表」
+      var rawRows = [];
+      (mainTable.rows || []).forEach(function (r) {
+        var c = r.c || [];
+        var name = cellVal(c[0]);
+        var keyword = cellVal(c[1]);
+        var tpl = cellVal(c[2]) || '番号';
+        if (!name && !keyword) return;
+        if (name === '姓名' && (keyword === '关键词' || keyword === '暗号')) return;
+        rawRows.push({ name: name, keyword: keyword, template: tpl });
+      });
+
+      // 2. 解析「短链」
+      var rawLinks = [];
+      if (linkTable && Array.isArray(linkTable.rows)) {
+        linkTable.rows.forEach(function (r) {
+          var c = r.c || [];
+          var name = cellVal(c[0]);
+          var slug = cellVal(c[1]);
+          var url  = cellVal(c[2]);
+          if (!name || (!slug && !url)) return;
+          if (name === '姓名' && (slug === '短链' || url === '地址')) return;
+          rawLinks.push({ name: name, slug: slug, url: url });
+        });
+      }
+
+      // 3. 解析「团队」
+      var parsedTeams = [];
+      if (teamTable) {
+        var tCols = teamTable.cols || [];
+        var tRows = teamTable.rows || [];
+        var colLabels = tCols.map(function (col) { return String((col && col.label) || '').trim(); });
+        var dataStartRow = 0;
+
+        // 兜底：若第 1 行没有放入 cols.label 而是出现在 tRows[0]
+        var hasColLabels = colLabels.some(function (lbl, i) { return i >= 1 && lbl.length > 0; });
+        if (!hasColLabels && tRows.length > 0) {
+          colLabels = (tRows[0].c || []).map(cellVal);
+          dataStartRow = 1;
+        }
+
+        for (var colIdx = 1; colIdx < colLabels.length; colIdx++) {
+          var teamName = colLabels[colIdx];
+          if (!teamName) continue;
+          // 清理可能被自动附加的人数尾部
+          teamName = teamName.replace(/\s+\d+$/, '').trim();
+          var members = [];
+          for (var rIdx = dataStartRow; rIdx < tRows.length; rIdx++) {
+            var cells = (tRows[rIdx] && tRows[rIdx].c) || [];
+            var aVal = cellVal(cells[0]);
+            var val = cellVal(cells[colIdx]);
+            if (aVal === '组员人数' || aVal === '组名称') continue;
+            // 跳过人数统计行（纯数字）
+            if (/^\d+$/.test(val)) continue;
+            if (val) members.push(val);
+          }
+          parsedTeams.push({
+            name: teamName,
+            count: members.length,
+            members: members
+          });
+        }
+      }
+
+      return {
+        ok: true,
+        rows: rawRows,
+        shortLinks: rawLinks,
+        teams: parsedTeams
+      };
+    });
+  }
+
+  function applyRemoteSnapshot(data, mode, sheetTitle) {
+    if (Array.isArray(data.teams)) {
+      state.teams = data.teams;
+    }
+    if (Array.isArray(data.rows)) {
+      state.rows = data.rows;
+    }
+    if (Array.isArray(data.shortLinks)) {
+      state.shortLinks = data.shortLinks;
+    }
+    if (data.settings && typeof data.settings === 'object') {
+      state.settings = Object.assign({}, state.settings, data.settings);
+    }
+    state.updatedAt = data.updatedAt || new Date().toISOString();
+    state.source = mode === 'gas' ? 'cloud-gas' : 'cloud-gviz';
+    syncMeta.status = 'ok';
+    syncMeta.mode = mode;
+    syncMeta.lastSyncAt = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    syncMeta.sheetTitle = sheetTitle || '暗号表';
+    syncMeta.error = '';
+    persistState();
+    notify();
+    return buildDerivedModel();
+  }
+
+  function pullFromOnlineSheet() {
     var cfg = loadBindConfig();
     var gasUrl = cfg.appsScriptUrl;
     var parsedSheet = parseSheetInput(cfg.sheetUrl);
@@ -359,7 +640,6 @@
     syncMeta.error = '';
     notify();
 
-    // 优先使用 Apps Script Web App 接口（支持读取完整结构 + 站点设置 + 自动合并子表）
     if (gasUrl) {
       var sep = gasUrl.indexOf('?') >= 0 ? '&' : '?';
       var reqUrl = gasUrl + sep + 'action=bootstrap&_t=' + Date.now();
@@ -375,39 +655,14 @@
           if (!data || data.ok === false) {
             throw new Error((data && data.error) || 'Apps Script 返回异常');
           }
-          if (Array.isArray(data.rows)) {
-            state.rows = sortRowsByTemplateOrder(data.rows);
-          }
-          if (data.settings && typeof data.settings === 'object') {
-            state.settings = Object.assign({}, state.settings, data.settings);
-          }
-          state.updatedAt = data.updatedAt || new Date().toISOString();
-          state.source = 'cloud-gas';
-          syncMeta.status = 'ok';
-          syncMeta.mode = 'gas';
-          syncMeta.lastSyncAt = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-          syncMeta.sheetTitle = (data.spreadsheetName ? data.spreadsheetName + ' · ' : '') + (data.sheetName || '总表');
-          syncMeta.error = '';
-          persistState();
-          notify();
-          return buildDerivedModel();
+          var title = (data.spreadsheetName ? data.spreadsheetName + ' · ' : '') + (data.sheetName || '总表');
+          return applyRemoteSnapshot(data, 'gas', title);
         })
         .catch(function (err) {
-          // 若同时填了 Google 表格链接，自动降级尝试 GViz 直连读取
           if (parsedSheet.spreadsheetId) {
-            return fetchGoogleSheetViaGviz(parsedSheet.spreadsheetId, parsedSheet.gid, cfg.sheetName)
+            return fetchAllSheetsViaGviz(parsedSheet.spreadsheetId, parsedSheet.gid, cfg.sheetName)
               .then(function (gvizRes) {
-                state.rows = gvizRes.rows;
-                state.updatedAt = new Date().toISOString();
-                state.source = 'cloud-gviz';
-                syncMeta.status = 'ok';
-                syncMeta.mode = 'gviz';
-                syncMeta.lastSyncAt = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-                syncMeta.sheetTitle = cfg.sheetName || 'Google 在线表格';
-                syncMeta.error = '';
-                persistState();
-                notify();
-                return buildDerivedModel();
+                return applyRemoteSnapshot(gvizRes, 'gviz', '暗号表（总表 + 短链 + 团队）');
               })
               .catch(function () {
                 syncMeta.status = 'err';
@@ -423,20 +678,9 @@
         });
     }
 
-    // 仅配置了 Google 表格链接/ID 时，使用 GViz JSONP 直连拉取
-    return fetchGoogleSheetViaGviz(parsedSheet.spreadsheetId, parsedSheet.gid, cfg.sheetName)
-      .then(function (res) {
-        state.rows = res.rows;
-        state.updatedAt = new Date().toISOString();
-        state.source = 'cloud-gviz';
-        syncMeta.status = 'ok';
-        syncMeta.mode = 'gviz';
-        syncMeta.lastSyncAt = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-        syncMeta.sheetTitle = cfg.sheetName || 'Google 在线表格';
-        syncMeta.error = '';
-        persistState();
-        notify();
-        return buildDerivedModel();
+    return fetchAllSheetsViaGviz(parsedSheet.spreadsheetId, parsedSheet.gid, cfg.sheetName)
+      .then(function (gvizRes) {
+        return applyRemoteSnapshot(gvizRes, 'gviz', '暗号表（总表 + 短链 + 团队）');
       })
       .catch(function (err) {
         syncMeta.status = 'err';
@@ -446,24 +690,23 @@
       });
   }
 
-  /**
-   * 将当前数据推送到在线表格（通过 Google Apps Script doPost）
-   * 写入前强制按「番号 → 聊天 → 对比 → 任务 → 新模版 → 备用 → 备用 2」顺序排列
-   */
   function pushToOnlineSheet(customAction, extraPayload) {
     var cfg = loadBindConfig();
     if (!cfg.appsScriptUrl) {
       return Promise.reject(new Error('请先在后台「在线表格绑定」中填写 Google Apps Script 部署链接 (Web App URL)'));
     }
     var parsedSheet = parseSheetInput(cfg.sheetUrl);
-    var sortedRows = sortRowsByTemplateOrder(state.rows);
+    var model = buildDerivedModel();
     var payload = Object.assign({
       action: customAction || 'SAVE_ROWS',
       token: cfg.adminToken || 'admin123',
       spreadsheetId: parsedSheet.spreadsheetId || '',
       sheetName: cfg.sheetName || '',
-      rows: sortedRows.map(function (r) {
+      rows: model.rows.map(function (r) {
         return { name: r.name, keyword: r.keyword, template: r.template };
+      }),
+      shortLinks: model.shortLinks.map(function (l) {
+        return { name: l.name, slug: l.slug, url: l.url };
       }),
       settings: state.settings
     }, extraPayload || {});
@@ -484,20 +727,7 @@
         if (!res || res.ok === false) {
           throw new Error((res && res.error) || '写入在线表格失败');
         }
-        if (Array.isArray(res.rows)) {
-          state.rows = sortRowsByTemplateOrder(res.rows);
-        } else {
-          state.rows = sortedRows;
-        }
-        state.updatedAt = res.updatedAt || new Date().toISOString();
-        state.source = 'cloud-gas';
-        syncMeta.status = 'ok';
-        syncMeta.mode = 'gas';
-        syncMeta.lastSyncAt = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-        syncMeta.error = '';
-        persistState();
-        notify();
-        return buildDerivedModel();
+        return applyRemoteSnapshot(res, 'gas', syncMeta.sheetTitle || '暗号表');
       })
       .catch(function (err) {
         syncMeta.status = 'err';
@@ -507,9 +737,15 @@
       });
   }
 
+  function cleanByTeamCloud() {
+    return pushToOnlineSheet('CLEAN_BY_TEAM', {});
+  }
+
   function setRows(newRows, options) {
     options = options || {};
-    state.rows = sortRowsByTemplateOrder(newRows);
+    var teamInfo = normalizeTeamsData(state.teams);
+    var validSet = options.ignoreWhitelist ? null : (teamInfo.validCount > 0 ? teamInfo.validSet : null);
+    state.rows = sortRowsByTemplateOrder(newRows, validSet, teamInfo.memberGroupMap);
     state.updatedAt = new Date().toISOString();
     if (!options.keepSource) state.source = 'local-edited';
     persistState();
@@ -518,6 +754,27 @@
     var cfg = loadBindConfig();
     if (options.pushCloud || (options.autoPush !== false && cfg.autoPushOnEdit && cfg.appsScriptUrl)) {
       return pushToOnlineSheet('SAVE_ROWS').catch(function () {});
+    }
+    return Promise.resolve(buildDerivedModel());
+  }
+
+  function setShortLinks(newLinks, options) {
+    options = options || {};
+    var teamInfo = normalizeTeamsData(state.teams);
+    var validSet = options.ignoreWhitelist ? null : (teamInfo.validCount > 0 ? teamInfo.validSet : null);
+    state.shortLinks = normalizeShortLinks(newLinks, validSet, teamInfo.memberGroupMap);
+    state.updatedAt = new Date().toISOString();
+    if (!options.keepSource) state.source = 'local-edited';
+    persistState();
+    notify();
+
+    var cfg = loadBindConfig();
+    if (options.pushCloud || (options.autoPush !== false && cfg.autoPushOnEdit && cfg.appsScriptUrl)) {
+      return pushToOnlineSheet('SAVE_SHORT_LINKS', {
+        shortLinks: state.shortLinks.map(function (l) {
+          return { name: l.name, slug: l.slug, url: l.url };
+        })
+      }).catch(function () {});
     }
     return Promise.resolve(buildDerivedModel());
   }
@@ -537,11 +794,13 @@
 
   function resetToDefault() {
     localStorage.removeItem(LOCAL_DATA_KEY);
-    var def = window.DEFAULT_DATA || { settings: {}, rows: [] };
+    var def = window.DEFAULT_DATA || { settings: {}, teams: [], rows: [], shortLinks: [] };
     state = {
-      updatedAt: new Date().toISOString(),
+      updatedAt: def.updatedAt || new Date().toISOString(),
       settings: JSON.parse(JSON.stringify(def.settings || {})),
-      rows: sortRowsByTemplateOrder(def.rows || []),
+      teams: JSON.parse(JSON.stringify(def.teams || [])),
+      rows: JSON.parse(JSON.stringify(def.rows || [])),
+      shortLinks: JSON.parse(JSON.stringify(def.shortLinks || [])),
       source: 'default'
     };
     persistState();
@@ -561,35 +820,38 @@
       autoSyncTimer = setInterval(function () {
         if (document.hidden) return;
         if (document.body.classList.contains('adm-on')) return;
-        pullFromOnlineSheet({ silent: true }).catch(function () {});
+        pullFromOnlineSheet().catch(function () {});
       }, sec * 1000);
     }
   }
 
-  // 当用户从 Google 表格标签页改完切回本网页时，自动触发一次实时拉取
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden && !document.body.classList.contains('adm-on')) {
       var cfg = loadBindConfig();
       if (cfg.appsScriptUrl || parseSheetInput(cfg.sheetUrl).spreadsheetId) {
-        pullFromOnlineSheet({ silent: true }).catch(function () {});
+        pullFromOnlineSheet().catch(function () {});
       }
     }
   });
 
   window.CHStore = {
     TEMPLATE_ORDER: TEMPLATE_ORDER,
+    normalizePersonName: normalizePersonName,
     normalizeTemplateName: normalizeTemplateName,
     getTemplateOrderIndex: getTemplateOrderIndex,
     sortRowsByTemplateOrder: sortRowsByTemplateOrder,
+    normalizeShortLinks: normalizeShortLinks,
     parseSheetInput: parseSheetInput,
     getBindConfig: loadBindConfig,
     saveBindConfig: saveBindConfig,
     getModel: buildDerivedModel,
     setRows: setRows,
+    setShortLinks: setShortLinks,
     updateSettings: updateSettings,
     resetToDefault: resetToDefault,
     pullFromOnlineSheet: pullFromOnlineSheet,
     pushToOnlineSheet: pushToOnlineSheet,
+    cleanByTeamCloud: cleanByTeamCloud,
     subscribe: function (fn) {
       if (typeof fn === 'function' && listeners.indexOf(fn) < 0) {
         listeners.push(fn);
@@ -599,4 +861,3 @@
 
   setupAutoSyncTimer();
 })();
-
